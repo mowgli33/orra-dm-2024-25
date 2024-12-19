@@ -31,6 +31,7 @@ will be used for evaluation, with two other test datasets. Make sure that it wor
 
 You can find the first dataset in [data/dataset_4](./data/dataset_4/). It contains three files: *X.npy*, *Y.npy* and *Z.npy*. They are organised so that $X[i] \succeq_{Z[i]} Y[i]$. Which means that the *i-th* element of X has been preferred to the *i-th* element of Y by the cluster described by the *i-th* element of Z.
 Of course Z is provided only for you to check your solution and shouldn't be used for the modelization.
+You can also use an equivalent with more features and pairs provided in [data/dataset_10](./data/dataset_10/).
 
 The second dataset needs to be downloaded through the choice-learn package. This [notebook](notebooks/loading_cars_data/ipynb) provides a few indications.
 
