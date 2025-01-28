@@ -2,6 +2,7 @@ import pickle
 from abc import abstractmethod
 
 import numpy as np
+from docplex.mp.model import Model
 
 
 class BaseModel(object):
@@ -25,6 +26,8 @@ class BaseModel(object):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
+
+        print("empty fit")
         # Customize what happens in the fit function
         return
 
@@ -182,12 +185,31 @@ class TwoClustersMIP(BaseModel):
             Number of clusters to implement in the MIP.
         """
         self.seed = 123
+        self.n_pieces = n_pieces
+        self.n_clusters = n_clusters
         self.model = self.instantiate()
 
     def instantiate(self):
         """Instantiation of the MIP Variables - To be completed."""
+
+        model = Model(name='TwoClustersMIP')
+
+        # Define decision variables
+        self.v = model.continuous_var_dict(
+            keys=[(j, k) for j in range(self.n_pieces) for k in range(self.n_clusters)],
+            name="v",
+            lb=0, ub=1
+        )
+
+        self.epsilon = model.continuous_var_list(self.n_clusters, name="epsilon", lb=0)
+
+        # Binary assignment variables: x[i, k] = 1 if sample i is assigned to cluster k
+        self.x = model.binary_var_matrix(
+            range(self.n_pieces), range(self.n_clusters), name="x"
+        )
         # To be completed
-        return
+        
+        return model
 
     def fit(self, X, Y):
         """Estimation of the parameters - To be completed.
@@ -199,26 +221,74 @@ class TwoClustersMIP(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
+        print("fitting")
+
+        n_samples, n_features = X.shape
+
+        # Add constraints
+        for i in range(n_samples):
+            self.model.add_constraint(
+                sum(self.x[i, k] for k in range(self.n_clusters)) == 1,
+                ctname=f"one_cluster_per_sample_{i}"
+            )
+
+        # Add cluster utility constraints
+        for j in range(n_samples):
+            for k in range(self.n_clusters):
+                self.model.add_constraint(
+                    sum(self.v[k, f] * X[j, f] for f in range(n_features)) -
+                    sum(self.v[k, f] * Y[j, f] for f in range(n_features)) +
+                    self.epsilon[k] >= 0,
+                    ctname=f"utility_constraint_{j}_{k}"
+                )
+
+        # Set the objective to minimize epsilon
+        self.model.minimize(self.model.sum(self.epsilon))
+
+        # Solve the model
+        solution = self.model.solve(log_output=True)
+
+        # Check if a solution is found
+        if solution:
+            print("Optimal solution found!")
+            self.assignment = np.array([
+                [solution.get_value(self.x[i, k]) for k in range(self.n_clusters)]
+                for i in range(n_samples)
+            ])
+            self.utilities = np.array([
+                [solution.get_value(self.v[k, f]) for f in range(n_features)]
+                for k in range(self.n_clusters)
+            ])
+        else:
+            print("No feasible solution found.")
 
         # To be completed
         return
 
-    def predict_utility(self, X):
-        """Return Decision Function of the MIP for X. - To be completed.
 
-        Parameters:
-        -----------
+    def predict_utility(self, X):
+        """
+        Predict utility for each cluster based on the fitted model.
+        
+        Parameters
+        ----------
         X: np.ndarray
-            (n_samples, n_features) list of features of elements
+            (n_samples, n_features) list of features of elements.
         
         Returns
         -------
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
+        if self.utilities is None:
+            raise ValueError("Model has not been fitted yet.")
+        
         # To be completed
         # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
-        return
+
+        return np.dot(X, self.utilities.T)        
+
+   
 
 
 class HeuristicModel(BaseModel):
@@ -266,3 +336,5 @@ class HeuristicModel(BaseModel):
         # To be completed
         # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
         return
+
+
