@@ -2,7 +2,7 @@ import pickle
 from abc import abstractmethod
 
 import numpy as np
-from docplex.mp.model import Model
+from gurobipy import Model, GRB
 
 
 class BaseModel(object):
@@ -170,49 +170,59 @@ class RandomExampleModel(BaseModel):
 
 
 class TwoClustersMIP(BaseModel):
-    """Skeleton of MIP you have to write as the first exercise.
-    You have to encapsulate your code within this class that will be called for evaluation.
-    """
+    """Skeleton of MIP adapted to work with Gurobi."""
 
-    def __init__(self, n_pieces, n_clusters):
+    def __init__(self, n_pieces, n_clusters, n_criterions, n_pairs):
         """Initialization of the MIP Variables
 
         Parameters
         ----------
         n_pieces: int
-            Number of pieces for the utility function of each feature.
+            Number of pieces for the utility function of each feature (L).
         n_clusters: int
             Number of clusters to implement in the MIP.
+        n_criterions :
+            Number of criterions for the utility function
+        n_pairs :
+            Number of samples in the data
         """
         self.seed = 123
-        self.n_pieces = n_pieces
-        self.n_clusters = n_clusters
+        self.L = n_pieces
+        self.K = n_clusters
+        self.n = n_criterions
+        self.P = n_pairs
         self.model = self.instantiate()
 
     def instantiate(self):
-        """Instantiation of the MIP Variables - To be completed."""
+        """Instantiation of the MIP Variables"""
 
-        model = Model(name='TwoClustersMIP')
+        model = Model('TwoClustersMIP')
+        model.setParam('Seed', self.seed)
 
         # Define decision variables
-        self.v = model.continuous_var_dict(
-            keys=[(j, k) for j in range(self.n_pieces) for k in range(self.n_clusters)],
-            name="v",
-            lb=0, ub=1
+        self.v = model.addVars(
+            [(i, l, k) for i in range(self.n) for l in range(self.L+1) for k in range(self.K)],
+            vtype=GRB.CONTINUOUS, name="v", lb=0, ub=1
         )
 
-        self.epsilon = model.continuous_var_list(self.n_clusters, name="epsilon", lb=0)
-
-        # Binary assignment variables: x[i, k] = 1 if sample i is assigned to cluster k
-        self.x = model.binary_var_matrix(
-            range(self.n_pieces), range(self.n_clusters), name="x"
+        self.epsilon = model.addVars(
+            [(j, k) for j in range(self.P) for k in range(self.K)], vtype=GRB.CONTINUOUS, name="epsilon", lb=0
         )
-        # To be completed
-        
+
+        # Binary assignment variables: z[j, k] = 1 if sample j is assigned to cluster k
+        self.z = model.addVars(
+            [(j, k) for j in range(self.P) for k in range(self.K)],
+            vtype=GRB.BINARY, name="z"
+        )
+
         return model
+    
+    def indicatrice_segment(self, x, xl, xl_plus_1):
+        return 1 if xl <= x <= xl_plus_1 else 0
+
 
     def fit(self, X, Y):
-        """Estimation of the parameters - To be completed.
+        """Estimation of the parameters
 
         Parameters
         ----------
@@ -221,75 +231,77 @@ class TwoClustersMIP(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
-        print("fitting")
-
-        n_samples, n_features = X.shape
+        print("Fitting the model")
 
         # Add constraints
-        for i in range(n_samples):
-            self.model.add_constraint(
-                sum(self.x[i, k] for k in range(self.n_clusters)) == 1,
-                ctname=f"one_cluster_per_sample_{i}"
+        for j in range(self.P):
+            self.model.addConstr(
+                sum(self.z[j, k] for k in range(self.K)) >= 1,
+                name=f"one_cluster_per_sample_{j}"
             )
+        
+        for k in range(self.K) :
+            self.model.addConstr(
+                sum(self.v[i,self.L,k] for i in range(self.n)) == 1
+            )
+            self.model.addConstr(
+                sum(self.v[i,0,k] for i in range(self.n)) == 0
+            )
+            for i in range(self.n):
+                for l in range(self.L):
+                    self.model.addConstr(
+                        self.v[i,l,k]+0.00001<=self.v[i,l+1,k]
+                    )
 
-        # Add cluster utility constraints
-        for j in range(n_samples):
-            for k in range(self.n_clusters):
-                self.model.add_constraint(
-                    sum(self.v[k, f] * X[j, f] for f in range(n_features)) -
-                    sum(self.v[k, f] * Y[j, f] for f in range(n_features)) +
-                    self.epsilon[k] >= 0,
-                    ctname=f"utility_constraint_{j}_{k}"
+        
+
+
+        for k in range(self.K):
+            for j in range(self.P) :
+                self.model.addConstr(
+                    sum(self.indicatrice_segment(X[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (X[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) -
+                    sum(self.indicatrice_segment(Y[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (Y[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) +
+                    self.epsilon[j,k] + 2*(1-self.z[j,k]) >= 0,
+                    name = f'utility_constraint_u_{k}'
                 )
 
+
+
         # Set the objective to minimize epsilon
-        self.model.minimize(self.model.sum(self.epsilon))
+        self.model.setObjective(
+            sum(self.epsilon[j,k] for j in range(self.P) for k in range(self.K)), GRB.MINIMIZE
+        )
 
         # Solve the model
-        solution = self.model.solve(log_output=True)
-
-        # Check if a solution is found
-        if solution:
-            print("Optimal solution found!")
-            self.assignment = np.array([
-                [solution.get_value(self.x[i, k]) for k in range(self.n_clusters)]
-                for i in range(n_samples)
-            ])
-            self.utilities = np.array([
-                [solution.get_value(self.v[k, f]) for f in range(n_features)]
-                for k in range(self.n_clusters)
-            ])
-        else:
-            print("No feasible solution found.")
-
-        # To be completed
+        self.model.optimize()
         return
-
 
     def predict_utility(self, X):
         """
         Predict utility for each cluster based on the fitted model.
-        
+
         Parameters
         ----------
         X: np.ndarray
             (n_samples, n_features) list of features of elements.
-        
+
         Returns
         -------
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
-        if self.utilities is None:
-            raise ValueError("Model has not been fitted yet.")
+
         
-        # To be completed
-        # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
+        A = np.zeros((self.P,self.K))
 
-        return np.dot(X, self.utilities.T)        
+        for j in range(self.P) :
+            for k in range(self.K) :
+                A[j,k] = sum(self.indicatrice_segment(X[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k].X + self.L*(self.v[i,l+1,k].X - self.v[i,l,k].X) * (X[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n))
 
-   
-
+        return A
+    
+    def UTA_check(self) :
+        return
 
 class HeuristicModel(BaseModel):
     """Skeleton of MIP you have to write as the first exercise.

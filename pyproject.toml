@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "docplex>=2.29.241",
+    "importlib>=1.0.4",
     "ipykernel>=6.29.5",
     "matplotlib>=3.7.5",
     "numpy>=1.24.4",
