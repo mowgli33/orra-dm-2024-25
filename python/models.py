@@ -261,7 +261,7 @@ class TwoClustersMIP(BaseModel):
                 self.model.addConstr(
                     sum(self.indicatrice_segment(X[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (X[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) -
                     sum(self.indicatrice_segment(Y[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (Y[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) +
-                    self.epsilon[j,k] + 2*(1-self.z[j,k]) >= 0,
+                    self.epsilon[j,k] + 2*(1-self.z[j,k]) >= 0.001,
                     name = f'utility_constraint_u_{k}'
                 )
 
@@ -308,16 +308,48 @@ class HeuristicModel(BaseModel):
     You have to encapsulate your code within this class that will be called for evaluation.
     """
 
-    def __init__(self):
-        """Initialization of the Heuristic Model.
+    def __init__(self, n_pieces, n_clusters, n_criterions, n_pairs,Z):
+        """Initialization of the MIP Variables
+
+        Parameters
+        ----------
+        n_pieces: int
+            Number of pieces for the utility function of each feature (L).
+        n_clusters: int
+            Number of clusters to implement in the MIP.
+        n_criterions :
+            Number of criterions for the utility function
+        n_pairs :
+            Number of samples in the data
         """
         self.seed = 123
-        self.models = self.instantiate()
+        self.L = n_pieces
+        self.K = n_clusters
+        self.n = n_criterions
+        self.P = n_pairs
+        self.z = Z
+        self.model = self.instantiate()
 
     def instantiate(self):
         """Instantiation of the MIP Variables"""
-        # To be completed
-        return
+
+        model = Model('HeuristicModel')
+        model.setParam('Seed', self.seed)
+
+        # Define decision variables
+        self.v = model.addVars(
+            [(i, l, k) for i in range(self.n) for l in range(self.L+1) for k in range(self.K)],
+            vtype=GRB.CONTINUOUS, name="v", lb=0, ub=1
+        )
+
+        self.epsilon = model.addVars(
+            [(j, k) for j in range(self.P) for k in range(self.K)], vtype=GRB.CONTINUOUS, name="epsilon", lb=0
+        )
+
+        return model
+    
+    def indicatrice_segment(self, x, xl, xl_plus_1):
+        return 1 if xl <= x <= xl_plus_1 else 0
 
     def fit(self, X, Y):
         """Estimation of the parameters - To be completed.
@@ -329,8 +361,28 @@ class HeuristicModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
-        # To be completed
+        print("Fitting the model")
+
+        # Add constraints
+        for k in range(self.K):
+            self.model.addConstr(sum(self.v[i,self.L,k] for i in range(self.n)) == 1)
+            self.model.addConstr(sum(self.v[i,0,k] for i in range(self.n)) == 0)
+            for i in range(self.n):
+                for l in range(self.L):
+                    self.model.addConstr(self.v[i,l,k]+0.00001<=self.v[i,l+1,k])
+            for j in range(self.P) :
+                self.model.addConstr(
+                    sum(self.indicatrice_segment(X[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (X[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) -
+                    sum(self.indicatrice_segment(Y[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k] + self.L*(self.v[i,l+1,k] - self.v[i,l,k]) * (Y[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n)) +
+                    self.epsilon[j,k] + 2*(1-self.z[j,k]) >= 0,name = f'utility_constraint_u_{k}')
+
+        # Set the objective to minimize epsilon
+        self.model.setObjective(sum(self.epsilon[j,k] for j in range(self.P) for k in range(self.K)), GRB.MINIMIZE)
+
+        # Solve the model
+        self.model.optimize()
         return
+
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
@@ -345,8 +397,14 @@ class HeuristicModel(BaseModel):
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
+
+        A = np.zeros((self.P,self.K))
+
+        for j in range(self.P) :
+            for k in range(self.K) :
+                A[j,k] = sum(self.indicatrice_segment(X[j,i], l/self.L, (l+1)/self.L) * (self.v[i,l,k].X + self.L*(self.v[i,l+1,k].X - self.v[i,l,k].X) * (X[j,i]-l/self.L)) for l in range(self.L) for i in range(self.n))
+
+        return A
         # To be completed
         # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
         return
-
-
